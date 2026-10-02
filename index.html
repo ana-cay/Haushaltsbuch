@@ -354,7 +354,7 @@ function viewHome(C){
   const o=C[curPid()]; const days=Math.max(0, Math.ceil((payDate(o.id)-new Date(todayISO()+"T00:00:00"))/864e5));
   const over=o.result<0;
   let h = head("Mein Stand", `Periode ${pLabel(o.id)}`);
-  if (!Object.keys(S.periods).length) h += `<div class="card" style="margin-bottom:10px"><h3>Willkommen</h3><p class="small muted" style="margin:6px 0 10px">Spiel deine Sicherung ein, um deine bisherigen Daten zu übernehmen, oder starte mit + neu.</p><button class="btn" data-act="import">Sicherung einspielen</button></div>`;
+  if (!Object.keys(S.periods).length) h += `<div class="card" style="margin-bottom:10px"><h3>Willkommen</h3><p class="small muted" style="margin:6px 0 10px">Spiel deine Sicherung ein, um deine bisherigen Daten zu übernehmen, oder starte mit + neu.</p><label class="btn " style="display:block;text-align:center;cursor:pointer">Sicherung einspielen<input type="file" data-import style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></label></div>`;
   h += `<section class="hero" aria-live="polite"><div class="lbl">${over?"Über Budget":"Noch verfügbar"}</div>
     <div class="big num ${over?"neg":"pos"}">${fmt(Math.abs(o.result))}</div>${strip(o)}
     <div class="meta num"><span>Ausgegeben ${fmt(o.spent)}</span><span>Budget ${fmt(o.start)}</span></div></section>`;
@@ -506,8 +506,9 @@ function viewSetup(){
     <p class="small muted" style="margin:6px 0 10px">${!Lock.available()?"Auf diesem Gerät nicht verfügbar.":Lock.data?"Aktiv. Die App fragt beim Öffnen und nach mehr als einer Minute im Hintergrund nach deinem Code.":"Aus. Mit einem Code sieht niemand deine Zahlen, der dein entsperrtes Handy in die Hand bekommt."}</p>
     ${Lock.available()?(Lock.data?`<div class="row" style="margin-top:0"><button class="btn ghost" data-act="pinchange">Code ändern</button><button class="btn ghost" data-act="pinoff">Ausschalten</button></div>`:`<button class="btn" data-act="pinset">Code festlegen</button>`):""}</div>
   <div class="card" style="margin-top:10px"><h3>Daten</h3><p class="small muted" style="margin:6px 0 10px">Deine Daten bleiben nur auf diesem Handy. Die App schickt nichts ins Internet. Speichere ab und zu eine Sicherung, zum Beispiel in iCloud Drive oder Dateien.</p>
-    <div class="row" style="margin-top:0"><button class="btn ghost" data-act="json">Sicherung speichern</button><button class="btn ghost" data-act="import">Sicherung einspielen</button></div>
-    <button class="btn ghost" style="margin-top:8px" data-act="csv">Als CSV exportieren</button></div>`;
+    <div class="row" style="margin-top:0"><button class="btn ghost" data-act="json">Sicherung speichern</button><label class="btn ghost" style="display:block;text-align:center;cursor:pointer">Sicherung einspielen<input type="file" data-import style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></label></div>
+    <button class="btn ghost" style="margin-top:8px" data-act="csv">Als CSV exportieren</button></div>
+  <p class="small muted" style="text-align:center;margin-top:14px">App-Version 1.6</p>`;
 }
 const settleOpts = v => [["tagesgeld","mit Extrageld verrechnen"],["carry","ins nächste Budget übertragen"],["extern","anderweitig ausgleichen"]].map(([k,l])=>`<option value="${k}" ${v===k?"selected":""}>${l}</option>`).join("");
 
@@ -643,16 +644,22 @@ async function download(filename, data){
   } catch(e){ if (e && e.name==="AbortError") return; }
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
-function importBackup(){
-  const inp=document.createElement("input"); inp.type="file"; inp.accept=".json,application/json";
-  inp.onchange=async()=>{ const f=inp.files&&inp.files[0]; if(!f) return;
-    try { const d=JSON.parse(await f.text());
-      if (!d || typeof d!=="object" || !d.periods || typeof d.periods!=="object") throw new Error("format");
-      const n=Object.keys(d.periods).length;
-      if (Object.keys(S.periods).length && !confirm(`Sicherung mit ${n} Perioden einspielen? Die Daten auf diesem Gerät werden ersetzt.`)) return;
-      S={config:d.config||clone(DEFAULT_CFG), periods:d.periods, summary:null}; migrate(); Store.save("all"); render(); toast(`${n} Perioden übernommen`);
-    } catch(e){ toast("Diese Datei ist keine gültige Sicherung des Haushaltsbuchs."); } };
-  inp.click();
+function readFile(f){
+  if (f.text) return f.text();
+  return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(r.error); r.readAsText(f); });
+}
+async function importFile(f){
+  if (!f) return;
+  toast("Sicherung wird gelesen…");
+  let d;
+  try { let txt=await readFile(f); txt=String(txt).replace(/^\uFEFF/,"").trim(); d=JSON.parse(txt); }
+  catch(e){ toast("Die Datei ließ sich nicht lesen. Ist es die JSON-Sicherung?"); return; }
+  if (!d || typeof d!=="object" || !d.periods || typeof d.periods!=="object"){ toast("Diese Datei ist keine Sicherung des Haushaltsbuchs."); return; }
+  const n=Object.keys(d.periods).length;
+  if (Object.keys(S.periods).length && !confirm(`Sicherung mit ${n} Perioden einspielen? Die Daten auf diesem Gerät werden ersetzt.`)) return;
+  const cfgIn = d.config && d.config.categories ? d.config : clone(DEFAULT_CFG);
+  if (!cfgIn.methods) cfgIn.methods = clone(DEFAULT_CFG.methods);
+  S={config:cfgIn, periods:d.periods, summary:null}; migrate(); Store.save("all"); V.tab="home"; render(); toast(`${n} Perioden übernommen`);
 }
 function csv(){
   const q=s=>`"${String(s??"").replace(/"/g,'""')}"`; const rows=[["Periode","Datum","Betrag","Kategorie","Bezeichnung"].join(";")];
@@ -679,14 +686,13 @@ document.addEventListener("click", e=>{
     case "addcat": { const n=$("#newcat").value.trim().slice(0,30); if (!n) return; S.config.categories.push({id:"c"+uid(), name:n, color:["#E63946","#F15BB5","#3A86FF","#8338EC","#84C341","#FFBE0B","#00B4D8"][cfg().categories.length%7]}); Store.save("config"); render(); break; }
     case "addmeth": { const n=$("#newmeth").value.trim().slice(0,24); if (!n || cfg().methods.includes(n)) return; S.config.methods.push(n); Store.save("config"); render(); break; }
     case "csv": csv(); break;
-    case "import": importBackup(); break;
     case "pinset": Lock.unlocked=true; Lock.open("setup1"); break;
     case "pinchange": Lock.open("verifyChange"); break;
     case "pinoff": Lock.open("verifyOff"); break;
     case "json": download(`haushaltsbuch-sicherung-${todayISO()}.json`, JSON.stringify(S,null,1)); break;
   }
 });
-document.addEventListener("change", e=>{ const c=e.target.dataset && e.target.dataset.color; if (c){ const k=S.config.categories.find(x=>x.id===c); if (k){ k.color=e.target.value; Store.save("config"); } } });
+document.addEventListener("change", e=>{ if (e.target.matches && e.target.matches("input[data-import]")){ const f=e.target.files && e.target.files[0]; importFile(f); e.target.value=""; return; } const c=e.target.dataset && e.target.dataset.color; if (c){ const k=S.config.categories.find(x=>x.id===c); if (k){ k.color=e.target.value; Store.save("config"); } } });
 document.addEventListener("keydown", e=>{ if (e.key==="Enter" && e.target.id==="aiq") document.querySelector('[data-act="ask"]')?.click(); });
 $("#fab").onclick=()=>openTx(null);
 let rz; window.addEventListener("resize",()=>{ clearTimeout(rz); rz=setTimeout(()=>{ if (V.tab==="jahr") render(); },200); });
